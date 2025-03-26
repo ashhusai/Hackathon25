@@ -77,9 +77,9 @@ def create_index_if_not_exists(index_name: str, dimension: int = 768):
 
 def load_and_chunk(repo_path: str) -> List[Document]:
     """
-    Loads .go, .yaml, .sh from `repo_path`, splits them into chunks.
+    Loads .go, .yaml, .sh .js .c .cpp from `repo_path`, splits them into chunks.
     """
-    exts = [".go", ".yaml", ".sh"]
+    exts = [".go", ".yaml", ".sh", ".js", ".c", ".cpp"]
     docs = []
 
     repo_dir = Path(repo_path).expanduser().resolve()
@@ -122,18 +122,22 @@ def embed_and_store(docs_subset: List[Document], gpu_id: int, index_name: str):
     print(f"[GPU {gpu_id}] Done storing {len(docs_subset)} docs in index='{index_name}'.")
 
 def multiprocess_embed(chunks: List[Document], index_name: str):
-    """
-    Multi-process embedding logic for a set of chunked docs, stored in 'index_name'.
-    """
-    # Create the index (if not exist)
     create_index_if_not_exists(index_name)
 
     total_chunks = len(chunks)
     print(f"Total chunks: {total_chunks} for index='{index_name}'")
 
+    if total_chunks == 0:
+        print(f"No documents found for embedding. Skipping multi-GPU process.")
+        return
+
     n = NUM_GPUS
     docs_per_gpu = math.ceil(total_chunks / n)
-    subsets = [chunks[i:i+docs_per_gpu] for i in range(0, total_chunks, docs_per_gpu)]
+    if docs_per_gpu == 0:
+        print(f"No docs to embed per GPU. Skipping.")
+        return
+
+    subsets = [chunks[i:i + docs_per_gpu] for i in range(0, total_chunks, docs_per_gpu)]
     subsets = subsets[:n]  # ensure at most N subsets
 
     processes = []
@@ -145,7 +149,8 @@ def multiprocess_embed(chunks: List[Document], index_name: str):
     for p in processes:
         p.join()
 
-    print(f"All GPU workers finished embedding & storing docs for index='{index_name}'.")
+    print(f"All GPU workers finished embedding for index='{index_name}'.")
+
 
 def unzip_all_team_repos(team_name: str, base_dir: Path) -> Path:
     """
@@ -172,19 +177,18 @@ def unzip_all_team_repos(team_name: str, base_dir: Path) -> Path:
 
     return temp_dir
 
-def embed_team(team_name: str, base_dir: Path):
+def embed_context(context_name: str, base_dir: Path):
     """
     Main function to embed all .zip repos for a given team_name. 
     Index name = team_name.
     """
-    print(f"\n=== Embedding for team '{team_name}' ===")
+    print(f"\n=== Embedding for context '{context_name}' ===")
     temp_dir = None
     try:
-        temp_dir = unzip_all_team_repos(team_name, base_dir)
-        chunks = load_and_chunk(str(temp_dir))
-        print(f"Loaded {len(chunks)} chunks from team='{team_name}'. Using index '{team_name}'")
-
-        multiprocess_embed(chunks, team_name)
+        #temp_dir = unzip_all_team_repos(team_name, base_dir)
+        chunks = load_and_chunk(base_dir)
+        print(f"Loaded {len(chunks)} chunks from context='{context_name}'. Using index '{context_name}'")
+        multiprocess_embed(chunks, context_name)
 
     finally:
         if temp_dir and temp_dir.exists():
