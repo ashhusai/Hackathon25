@@ -121,32 +121,6 @@ def embed_and_store(docs_subset: List[Document], gpu_id: int, index_name: str):
     vs.add_documents(docs_subset, bulk_size=BULK_SIZE, id_key="doc_id")
     print(f"[GPU {gpu_id}] Done storing {len(docs_subset)} docs in index='{index_name}'.")
 
-# def multiprocess_embed(chunks: List[Document], index_name: str):
-#     """
-#     Multi-process embedding logic for a set of chunked docs, stored in 'index_name'.
-#     """
-#     # Create the index (if not exist)
-#     create_index_if_not_exists(index_name)
-
-#     total_chunks = len(chunks)
-#     print(f"Total chunks: {total_chunks} for index='{index_name}'")
-
-#     n = NUM_GPUS
-#     docs_per_gpu = math.ceil(total_chunks / n)
-#     subsets = [chunks[i:i+docs_per_gpu] for i in range(0, total_chunks, docs_per_gpu)]
-#     subsets = subsets[:n]  # ensure at most N subsets
-
-#     processes = []
-#     for gpu_id in range(len(subsets)):
-#         p = mp.Process(target=embed_and_store, args=(subsets[gpu_id], gpu_id, index_name))
-#         p.start()
-#         processes.append(p)
-
-#     for p in processes:
-#         p.join()
-
-#     print(f"All GPU workers finished embedding & storing docs for index='{index_name}'.")
-
 def multiprocess_embed(chunks: List[Document], index_name: str):
     create_index_if_not_exists(index_name)
 
