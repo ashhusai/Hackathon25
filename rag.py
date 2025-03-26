@@ -31,7 +31,18 @@ def search_opensearch(query):
     response = requests.post(search_url, auth=AUTH, json=query_payload, headers=headers)
     results = response.json()
     docs = [hit["_source"]["text"] for hit in results["hits"]["hits"]]
-    return docs
+    context=format_dynamic_list_to_string(docs)
+    return context
+
+
+def format_dynamic_list_to_string(dynamic_list):
+    formatted_str = ""
+    for idx, item in enumerate(dynamic_list, 1):
+        formatted_str += f"Item {idx}:\n{'-' * 40}\n"
+        formatted_str += f"{item}\n"
+        formatted_str += "\n" + "=" * 40 + "\n"
+    return formatted_str
+
 
 # Create RAG pipeline using LangChain
 retriever = RetrievalQA.from_llm(
