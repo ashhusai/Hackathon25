@@ -547,6 +547,419 @@
 
 # # if __name__ == "__main__":
 # #     main()
+# import os
+# import json
+# import questionary
+# import requests
+# from io import BytesIO
+# import zipfile
+# from pathlib import Path
+
+# from embeddings.embed import embed_context  # The function we wrote in embed.py
+
+# GITHUB_API_URL = "https://api.github.com"
+# ORGANIZATION = "cisco-sbg"
+# CONTEXTS_JSON = "contexts.json"
+
+# def load_contexts():
+#     if os.path.exists(CONTEXTS_JSON):
+#         with open(CONTEXTS_JSON, "r", encoding="utf-8") as f:
+#             return json.load(f)
+#     return {}
+
+# def save_contexts(ctx):
+#     with open(CONTEXTS_JSON, "w", encoding="utf-8") as f:
+#         json.dump(ctx, f, ensure_ascii=False, indent=2)
+
+# def get_github_token():
+#     token = os.getenv("GITHUB_TOKEN")
+#     if not token:
+#         raise ValueError("GITHUB_TOKEN not set.")
+#     return token
+
+# def get_headers():
+#     return {
+#         "Authorization": f"token {get_github_token()}",
+#         "Accept": "application/vnd.github.v3+json"
+#     }
+
+# def search_repos(organization, query):
+#     """Return up to 20 repos matching `query` in the org."""
+#     headers = get_headers()
+#     params = {
+#         "q": f"{query} org:{organization}",
+#         "per_page": "20"
+#     }
+#     url = f"{GITHUB_API_URL}/search/repositories"
+#     resp = requests.get(url, headers=headers, params=params)
+#     if resp.status_code == 200:
+#         data = resp.json()
+#         return data.get("items", [])
+#     else:
+#         print(f"Error searching: {resp.status_code} {resp.reason}")
+#         return []
+
+# def fetch_repo_zip(repo_full_name, context_name):
+#     """
+#     Download the repo as a zip to ./repos/<context_name>/<repo_name>.
+#     Return the path we extracted to, or None if fail.
+#     """
+#     print(f"Fetching: {repo_full_name} for context '{context_name}'")
+#     headers = get_headers()
+#     zip_url = f"{GITHUB_API_URL}/repos/{repo_full_name}/zipball"
+#     r = requests.get(zip_url, headers=headers, stream=True)
+#     if r.status_code == 200:
+#         repo_name = repo_full_name.split("/",1)[1]
+#         target_dir = Path("repos") / context_name / repo_name
+#         target_dir.mkdir(parents=True, exist_ok=True)
+
+#         zip_data = BytesIO(r.content)
+#         with zipfile.ZipFile(zip_data, 'r') as zip_ref:
+#             zip_ref.extractall(str(target_dir))
+
+#         print(f"Extracted {repo_full_name} -> {target_dir}")
+#         return target_dir
+#     else:
+#         print(f"Failed to fetch {repo_full_name}: {r.status_code} {r.reason}")
+#         return None
+
+# def main():
+#     contexts = load_contexts()
+
+#     while True:
+#         action = questionary.select(
+#             "Main Menu: Choose an action",
+#             choices=[
+#                 "View existing contexts",
+#                 "Create / update context with new repos",
+#                 "Exit",
+#             ],
+#         ).ask()
+
+#         if action == "View existing contexts":
+#             if not contexts:
+#                 print("No contexts exist.")
+#             else:
+#                 for ctx, repos in contexts.items():
+#                     print(f"\nContext: {ctx}")
+#                     for r in repos:
+#                         print(f"  - {r}")
+
+#         elif action == "Create / update context with new repos":
+#             query = questionary.text("Search term (e.g. 'sfcn')?").ask()
+#             results = search_repos(ORGANIZATION, query)
+#             if not results:
+#                 print("No repos found.")
+#                 continue
+
+#             label_map = {}
+#             for r in results:
+#                 label = f"{r['full_name']} (★{r.get('stargazers_count',0)})"
+#                 label_map[label] = r
+
+#             selected_labels = questionary.checkbox(
+#                 "Select repos to embed:",
+#                 choices=list(label_map.keys())
+#             ).ask()
+#             if not selected_labels:
+#                 print("No repos selected.")
+#                 continue
+
+#             existing_names = list(contexts.keys())
+#             new_or_existing = questionary.select(
+#                 "Pick or create a context name:",
+#                 choices=existing_names + ["Create new context"]
+#             ).ask()
+
+#             if new_or_existing == "Create new context":
+#                 context_name = questionary.text("Enter context name (index)").ask()
+#                 if not context_name.strip():
+#                     print("Invalid context name.")
+#                     continue
+#             else:
+#                 context_name = new_or_existing
+
+#             # Ask if user wants to embed now
+#             confirm_embed = questionary.confirm(
+#                 f"Embed {len(selected_labels)} repos into context '{context_name}' now?"
+#             ).ask()
+#             if not confirm_embed:
+#                 print("Skipping embed.")
+#                 continue
+
+#             # For each selected repo:
+#             # 1) Download if not already in contexts
+#             # 2) embed_context(context_name, that path)
+#             newly_embedded = []
+#             for lbl in selected_labels:
+#                 r = label_map[lbl]
+#                 full_name = r["full_name"]
+#                 # if we've already embedded this repo in that context, skip
+#                 already_in_context = context_name in contexts and (full_name in contexts[context_name])
+#                 if already_in_context:
+#                     print(f"Repo {full_name} is already in context {context_name}, skipping download.")
+#                     continue
+
+#                 # fetch repo zip => repos/<context_name>/<repo_name>
+#                 extracted_path = fetch_repo_zip(full_name, context_name)
+#                 if not extracted_path:
+#                     print("Download failed, skipping embed.")
+#                     continue
+
+#                 # embed
+#                 from embeddings.embed import embed_context
+#                 embed_context(context_name, str(extracted_path))
+
+#                 # add to contexts
+#                 if context_name not in contexts:
+#                     contexts[context_name] = []
+#                 contexts[context_name].append(full_name)
+#                 newly_embedded.append(full_name)
+
+#             # save contexts
+#             if newly_embedded:
+#                 save_contexts(contexts)
+#                 print(f"Embedded {len(newly_embedded)} repos in context '{context_name}'. Updated contexts saved.")
+
+#         elif action == "Exit":
+#             print("Goodbye.")
+#             break
+
+# if __name__ == "__main__":
+#     main()
+
+
+
+
+
+
+##  BREAK
+
+# import os
+# import json
+# import questionary
+# import requests
+# from io import BytesIO
+# import zipfile
+# from pathlib import Path
+
+# # We'll import embed_context from your embed.py
+# # which can embed an entire local path into an OpenSearch index
+# from embeddings.embed import embed_context
+
+# GITHUB_API_URL = "https://api.github.com"
+# ORGANIZATION = "cisco-sbg"
+# CONTEXTS_JSON = "contexts.json"
+
+# def load_contexts():
+#     if os.path.exists(CONTEXTS_JSON):
+#         with open(CONTEXTS_JSON, "r", encoding="utf-8") as f:
+#             return json.load(f)
+#     return {}
+
+# def save_contexts(ctx):
+#     with open(CONTEXTS_JSON, "w", encoding="utf-8") as f:
+#         json.dump(ctx, f, ensure_ascii=False, indent=2)
+
+# def get_github_token():
+#     token = os.getenv("GITHUB_TOKEN")
+#     if not token:
+#         raise ValueError("GITHUB_TOKEN not set.")
+#     return token
+
+# def get_headers():
+#     return {
+#         "Authorization": f"token {get_github_token()}",
+#         "Accept": "application/vnd.github.v3+json"
+#     }
+
+# def search_repos(organization, query):
+#     """Return up to 20 repos matching `query` in the org."""
+#     headers = get_headers()
+#     params = {
+#         "q": f"{query} org:{organization}",
+#         "per_page": "20"  # limit to 20
+#     }
+#     url = f"{GITHUB_API_URL}/search/repositories"
+#     resp = requests.get(url, headers=headers, params=params)
+#     if resp.status_code == 200:
+#         data = resp.json()
+#         return data.get("items", [])
+#     else:
+#         print(f"Error searching: {resp.status_code} {resp.reason}")
+#         return []
+
+# def fetch_repo_zip(repo_full_name, context_name):
+#     """
+#     Download the repo as a zip to ./repos/<context_name>/<repo_name>.
+#     Return the path we extracted to, or None if fail.
+#     """
+#     print(f"Fetching: {repo_full_name} for context '{context_name}'")
+#     headers = get_headers()
+#     zip_url = f"{GITHUB_API_URL}/repos/{repo_full_name}/zipball"
+#     r = requests.get(zip_url, headers=headers, stream=True)
+#     if r.status_code == 200:
+#         repo_name = repo_full_name.split("/", 1)[1]
+#         target_dir = Path("repos") / context_name / repo_name
+#         target_dir.mkdir(parents=True, exist_ok=True)
+
+#         zip_data = BytesIO(r.content)
+#         with zipfile.ZipFile(zip_data, 'r') as zip_ref:
+#             zip_ref.extractall(str(target_dir))
+
+#         print(f"Extracted {repo_full_name} -> {target_dir}")
+#         return target_dir
+#     else:
+#         print(f"Failed to fetch {repo_full_name}: {r.status_code} {r.reason}")
+#         return None
+
+# def embed_repos_in_context(context_name, contexts):
+#     """
+#     1) Ask user for a search term, find up to 20 repos
+#     2) Let user pick which repos to embed
+#     3) Download + embed each selected repo
+#     4) Update contexts
+#     """
+#     query = questionary.text("Search term for repos (e.g. 'sfcn')?").ask()
+#     results = search_repos(ORGANIZATION, query)
+#     if not results:
+#         print("No repos found or an error occurred.")
+#         return  # no changes
+
+#     # Build label map
+#     label_map = {}
+#     for r in results:
+#         label = f"{r['full_name']} (★{r.get('stargazers_count',0)})"
+#         label_map[label] = r
+
+#     selected_labels = questionary.checkbox(
+#         "Select repos to embed:",
+#         choices=list(label_map.keys())
+#     ).ask()
+#     if not selected_labels:
+#         print("No repos selected.")
+#         return
+
+#     newly_embedded = []
+#     for lbl in selected_labels:
+#         r = label_map[lbl]
+#         full_name = r["full_name"]
+#         # if we've already embedded this repo in that context, skip
+#         already_in_context = context_name in contexts and (full_name in contexts[context_name])
+#         if already_in_context:
+#             print(f"Repo {full_name} is already in context {context_name}, skipping.")
+#             continue
+
+#         # fetch repo => repos/<context_name>/<repo_name>
+#         extracted_path = fetch_repo_zip(full_name, context_name)
+#         if not extracted_path:
+#             print("Download failed, skipping embed for this repo.")
+#             continue
+
+#         # embed
+#         embed_context(context_name, str(extracted_path))
+
+#         # add to contexts
+#         if context_name not in contexts:
+#             contexts[context_name] = []
+#         contexts[context_name].append(full_name)
+#         newly_embedded.append(full_name)
+
+#     if newly_embedded:
+#         save_contexts(contexts)
+#         print(f"Embedded {len(newly_embedded)} repos in context '{context_name}'. Updated contexts.")
+
+
+# def main():
+#     # Load persistent dictionary of contexts -> list of repos
+#     contexts = load_contexts()
+
+#     while True:
+#         action = questionary.select(
+#             "Main Menu: Choose an action",
+#             choices=[
+#                 "Select or create context",
+#                 "View existing contexts",
+#                 "Exit",
+#             ],
+#         ).ask()
+
+#         if action == "View existing contexts":
+#             if not contexts:
+#                 print("No contexts exist. Please create one or proceed with no context.")
+#             else:
+#                 for ctx, repos in contexts.items():
+#                     print(f"\nContext: {ctx}")
+#                     for r in repos:
+#                         print(f"  - {r}")
+
+#         elif action == "Select or create context":
+#             # If no contexts exist, ask them if they want to create or proceed with "no context"
+#             if not contexts:
+#                 choice = questionary.select(
+#                     "No contexts exist yet. Create a new context or proceed with no context?",
+#                     choices=["Create new context", "Proceed with no context"]
+#                 ).ask()
+#                 if choice == "Create new context":
+#                     context_name = questionary.text("Enter a new context name (index)?").ask()
+#                     if not context_name.strip():
+#                         print("Invalid context name.")
+#                         continue
+#                     # We skip adding it to contexts here until we embed something or the user wants an empty context
+#                 else:
+#                     context_name = None  # no context
+#             else:
+#                 # If contexts exist, let them pick an existing one or create new
+#                 existing_ctx_list = list(contexts.keys())
+#                 chosen = questionary.select(
+#                     "Pick an existing context or create a new one:",
+#                     choices=existing_ctx_list + ["Create new context", "Proceed with no context"]
+#                 ).ask()
+#                 if chosen == "Create new context":
+#                     context_name = questionary.text("Enter context name (index)?").ask()
+#                     if not context_name.strip():
+#                         print("Invalid name.")
+#                         continue
+#                 elif chosen == "Proceed with no context":
+#                     context_name = None
+#                 else:
+#                     context_name = chosen
+
+#             # Next, do we embed additional repos?
+#             if context_name:
+#                 add_more = questionary.confirm(
+#                     f"Do you want to embed additional repositories into context '{context_name}'?"
+#                 ).ask()
+#                 if add_more:
+#                     # embed logic
+#                     embed_repos_in_context(context_name, contexts)
+
+#             # Now we have a context_name (or None). 
+#             # Next step: prompt user for a query (like "Would you like to ask a question?").
+#             # If context_name is None, we can't do retrieval, but we could proceed anyway.
+
+#             ask_query = questionary.confirm("Do you want to ask a query now?").ask()
+#             if ask_query:
+#                 user_query = questionary.text("Enter your query:").ask()
+#                 if not user_query.strip():
+#                     print("No query provided.")
+#                     continue
+
+#                 if context_name:
+#                     print(f"(TODO) Will do RAG from context='{context_name}' for query='{user_query}'...")
+#                     print("We'll implement the actual retrieval + LLM call later.")
+#                 else:
+#                     print(f"No context selected. Query='{user_query}' can't do retrieval. We'll just do nothing for now.")
+                    
+#             else:
+#                 print("Skipping query for now.")
+
+#         elif action == "Exit":
+#             print("Goodbye.")
+#             break
+
+# if __name__ == "__main__":
+#     main()
 import os
 import json
 import questionary
@@ -555,7 +968,8 @@ from io import BytesIO
 import zipfile
 from pathlib import Path
 
-from embeddings.embed import embed_context  # The function we wrote in embed.py
+from embeddings.embed import embed_context
+from rag import rag_query  # We'll call rag_query(context_name, user_query)
 
 GITHUB_API_URL = "https://api.github.com"
 ORGANIZATION = "cisco-sbg"
@@ -609,7 +1023,7 @@ def fetch_repo_zip(repo_full_name, context_name):
     zip_url = f"{GITHUB_API_URL}/repos/{repo_full_name}/zipball"
     r = requests.get(zip_url, headers=headers, stream=True)
     if r.status_code == 200:
-        repo_name = repo_full_name.split("/",1)[1]
+        repo_name = repo_full_name.split("/", 1)[1]
         target_dir = Path("repos") / context_name / repo_name
         target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -623,103 +1037,125 @@ def fetch_repo_zip(repo_full_name, context_name):
         print(f"Failed to fetch {repo_full_name}: {r.status_code} {r.reason}")
         return None
 
+def embed_repos_in_context(context_name, contexts):
+    """
+    1) Ask user for a search term, find up to 20 repos
+    2) Let user pick which repos to embed
+    3) Download + embed each selected repo
+    4) Update contexts
+    """
+    query = questionary.text("Search term for repos (e.g. 'sfcn')?").ask()
+    results = search_repos(ORGANIZATION, query)
+    if not results:
+        print("No repos found or an error occurred.")
+        return
+
+    label_map = {}
+    for r in results:
+        label = f"{r['full_name']} (★{r.get('stargazers_count',0)})"
+        label_map[label] = r
+
+    selected_labels = questionary.checkbox(
+        "Select repos to embed:",
+        choices=list(label_map.keys())
+    ).ask()
+    if not selected_labels:
+        print("No repos selected.")
+        return
+
+    newly_embedded = []
+    for lbl in selected_labels:
+        r = label_map[lbl]
+        full_name = r["full_name"]
+        already_in_context = context_name in contexts and (full_name in contexts[context_name])
+        if already_in_context:
+            print(f"Repo {full_name} is already in context '{context_name}', skipping.")
+            continue
+
+        extracted_path = fetch_repo_zip(full_name, context_name)
+        if not extracted_path:
+            print("Download failed, skipping embed for this repo.")
+            continue
+
+        # embed
+        embed_context(context_name, str(extracted_path))
+
+        # add to contexts
+        if context_name not in contexts:
+            contexts[context_name] = []
+        contexts[context_name].append(full_name)
+        newly_embedded.append(full_name)
+
+    if newly_embedded:
+        save_contexts(contexts)
+        print(f"Embedded {len(newly_embedded)} repos in context '{context_name}'. Updated contexts.")
+
 def main():
     contexts = load_contexts()
 
     while True:
         action = questionary.select(
-            "Main Menu: Choose an action",
+            "Main Menu",
             choices=[
+                "Select or create context",
                 "View existing contexts",
-                "Create / update context with new repos",
-                "Exit",
-            ],
+                "Exit"
+            ]
         ).ask()
 
         if action == "View existing contexts":
             if not contexts:
-                print("No contexts exist.")
+                print("No contexts exist yet.")
             else:
                 for ctx, repos in contexts.items():
                     print(f"\nContext: {ctx}")
                     for r in repos:
                         print(f"  - {r}")
 
-        elif action == "Create / update context with new repos":
-            query = questionary.text("Search term (e.g. 'sfcn')?").ask()
-            results = search_repos(ORGANIZATION, query)
-            if not results:
-                print("No repos found.")
-                continue
-
-            label_map = {}
-            for r in results:
-                label = f"{r['full_name']} (★{r.get('stargazers_count',0)})"
-                label_map[label] = r
-
-            selected_labels = questionary.checkbox(
-                "Select repos to embed:",
-                choices=list(label_map.keys())
-            ).ask()
-            if not selected_labels:
-                print("No repos selected.")
-                continue
-
-            existing_names = list(contexts.keys())
-            new_or_existing = questionary.select(
-                "Pick or create a context name:",
-                choices=existing_names + ["Create new context"]
-            ).ask()
-
-            if new_or_existing == "Create new context":
-                context_name = questionary.text("Enter context name (index)").ask()
-                if not context_name.strip():
-                    print("Invalid context name.")
-                    continue
+        elif action == "Select or create context":
+            # If no contexts exist, ask them if they want to create new or proceed with no context
+            if not contexts:
+                choice = questionary.select(
+                    "No contexts exist. Create new or proceed with none?",
+                    choices=["Create new context", "Proceed with no context"]
+                ).ask()
+                if choice == "Create new context":
+                    context_name = questionary.text("Enter new context name:").ask()
+                else:
+                    context_name = None
             else:
-                context_name = new_or_existing
+                # If contexts exist, user can pick an existing one, create new, or proceed with no context
+                existing_ctx_list = list(contexts.keys())
+                chosen = questionary.select(
+                    "Pick an existing context or create new / no context:",
+                    choices=existing_ctx_list + ["Create new context", "Proceed with no context"]
+                ).ask()
+                if chosen == "Create new context":
+                    context_name = questionary.text("Enter context name:").ask()
+                elif chosen == "Proceed with no context":
+                    context_name = None
+                else:
+                    context_name = chosen
 
-            # Ask if user wants to embed now
-            confirm_embed = questionary.confirm(
-                f"Embed {len(selected_labels)} repos into context '{context_name}' now?"
-            ).ask()
-            if not confirm_embed:
-                print("Skipping embed.")
-                continue
+            # Ask if user wants to embed additional repos (only if we have a context_name)
+            if context_name:
+                add_more = questionary.confirm(
+                    f"Embed additional repos into context '{context_name}'?"
+                ).ask()
+                if add_more:
+                    embed_repos_in_context(context_name, contexts)
 
-            # For each selected repo:
-            # 1) Download if not already in contexts
-            # 2) embed_context(context_name, that path)
-            newly_embedded = []
-            for lbl in selected_labels:
-                r = label_map[lbl]
-                full_name = r["full_name"]
-                # if we've already embedded this repo in that context, skip
-                already_in_context = context_name in contexts and (full_name in contexts[context_name])
-                if already_in_context:
-                    print(f"Repo {full_name} is already in context {context_name}, skipping download.")
-                    continue
-
-                # fetch repo zip => repos/<context_name>/<repo_name>
-                extracted_path = fetch_repo_zip(full_name, context_name)
-                if not extracted_path:
-                    print("Download failed, skipping embed.")
-                    continue
-
-                # embed
-                from embeddings.embed import embed_context
-                embed_context(context_name, str(extracted_path))
-
-                # add to contexts
-                if context_name not in contexts:
-                    contexts[context_name] = []
-                contexts[context_name].append(full_name)
-                newly_embedded.append(full_name)
-
-            # save contexts
-            if newly_embedded:
-                save_contexts(contexts)
-                print(f"Embedded {len(newly_embedded)} repos in context '{context_name}'. Updated contexts saved.")
+            # Now let's see if user wants to ask a query
+            ask_query = questionary.confirm("Do you want to ask a query now?").ask()
+            if ask_query:
+                user_query = questionary.text("Enter your query:").ask()
+                if user_query.strip():
+                    answer = rag_query(context_name, user_query)
+                    print(f"\nRAG-based answer:\n{answer}\n")
+                else:
+                    print("No query provided. Skipping.")
+            else:
+                print("Skipping query for now.")
 
         elif action == "Exit":
             print("Goodbye.")
