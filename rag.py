@@ -3,10 +3,11 @@
 import os
 import requests
 import json
+import boto3
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from requests.auth import HTTPBasicAuth
-from langchain_openai import ChatOpenAI
+# from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
@@ -43,12 +44,12 @@ load_dotenv()
 ############################################
 # For demonstration, we'll use OpenAI GPT-4 from langchain
 # Be sure to set OPENAI_API_KEY in your environment or pass api_key param
-openai_api_key = os.getenv("OPENAI_API_KEY", "your_openai_api_key")
-llm = ChatOpenAI(
-    model_name="gpt-4",
-    openai_api_key=openai_api_key,
-    temperature=0.2
-)
+# openai_api_key = os.getenv("OPENAI_API_KEY", "your_openai_api_key")
+# llm = ChatOpenAI(
+#     model_name="gpt-4",
+#     openai_api_key=openai_api_key,
+#     temperature=0.2
+# )
 
 ############################################
 # 2) The retrieval function for OpenSearch
@@ -65,12 +66,12 @@ def opensearch_knn_search(query: str, index_name: str, k=5):
 
     # B) Build the knn payload
     payload = {
-        "size": k,
+        "size": 5,
         "query": {
             "knn": {
-                "embedding": {
+                "vector_field": {
                     "vector": query_vector,
-                    "k": k
+                    "k": 5
                 }
             }
         }
@@ -90,14 +91,19 @@ def opensearch_knn_search(query: str, index_name: str, k=5):
 
     data = resp.json()
     # D) Extract chunk text from the hits
-    docs = []
-    for hit in data["hits"]["hits"]:
-        src = hit["_source"]
-        # We assume chunk text is in 'page_content'
-        text = src.get("page_content", "")
-        docs.append(text)
+    docs = [hit["_source"]["text"] for hit in data["hits"]["hits"]]
+    context = format_dynamic_list_to_string(docs)
+    return context
 
-    return docs
+
+#Formatting response received from OpenSearch to something readable
+def format_dynamic_list_to_string(dynamic_list):
+    formatted_str = ""
+    for idx, item in enumerate(dynamic_list, 1):
+        formatted_str += f"Item {idx}:\n{'-' * 40}\n"
+        formatted_str += f"{item}\n"
+        formatted_str += "\n" + "=" * 40 + "\n"
+    return formatted_str
 
 ############################################
 # 3) Prompt Construction
@@ -120,12 +126,55 @@ Answer:
 """
     return prompt
 
+def call_llm_endpoint(prompt: str) -> dict:
+    # Initialize the Bedrock client
+    bedrock = boto3.client(
+        service_name='bedrock-runtime',
+        region_name='us-east-1'  # Change region if needed
+    )
+
+    # Define the payload
+    payload = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 1000,
+        "top_k": 250,
+        "stop_sequences": [],
+        "temperature": 1,
+        "top_p": 0.999,
+        "messages": [
+            {
+                #This specifies that the message is coming from the user.
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    }
+                ]
+            }
+        ]
+    }
+
+    # Call the Claude 3.7 Sonnet model
+    response = bedrock.invoke_model(
+        modelId="anthropic.claude-3-7-sonnet-20250219-v1:0",
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps(payload)
+    )
+
+    # Parse and print the response
+    response_body = json.loads(response['body'].read())
+    print(type(response_body))
+    print(json.dumps(response_body, indent=2))
+
+    return response_body
 
 ## TODO - use call llm endpoint function
 ############################################
 # 4) The main RAG function
 ############################################
-def rag_query(index_name: str, user_query: str, k=5) -> str:
+def rag_query(index_name: str, user_query: str, k=5) -> dict:
     """
     1) Embeds the query & retrieves top chunks from 'index_name'
     2) Builds a final prompt
@@ -135,19 +184,18 @@ def rag_query(index_name: str, user_query: str, k=5) -> str:
     # If no index_name was specified, skip retrieval
     if not index_name:
         # just call the LLM with the raw question
-        raw_prompt = f"Question: {user_query}\nAnswer:"
-        return llm(raw_prompt)
+        prompt = f"Question: {user_query}\nAnswer:"
+    else:
+        # A) Retrieve docs from OpenSearch
+        docs = opensearch_knn_search(user_query, index_name, k=k)
+        if not docs:
+            # fallback: no docs found
+            prompt = f"No relevant docs found, but user asked:\n{user_query}\nAnswer as best you can:"
+        else:
+            # B) Build final prompt
+            prompt = build_prompt(user_query, docs)
 
-    # A) Retrieve docs from OpenSearch
-    docs = opensearch_knn_search(user_query, index_name, k=k)
-    if not docs:
-        # fallback: no docs found
-        fallback_prompt = f"No relevant docs found, but user asked:\n{user_query}\nAnswer as best you can:"
-        return llm(fallback_prompt)
-
-    # B) Build final prompt
-    prompt = build_prompt(user_query, docs)
-
-    # C) Call LLM
-    answer = llm(prompt)
+        # C) Call LLM
+    answer = call_llm_endpoint(prompt)
     return answer
+

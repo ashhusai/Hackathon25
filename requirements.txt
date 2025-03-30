@@ -4,5 +4,5 @@ questionary~=2.1.0
 opensearch-py
 langchain_community
 langchain_huggingface
-openai~=0.28.0
 langchain-openai
+boto3
