@@ -11,48 +11,8 @@ from requests.auth import HTTPBasicAuth
 
 load_dotenv()
 
-
-## TODO - Uncomment once we have a model
 ############################################
-# LLM via SageMaker endpoint
-############################################
-# def call_llm_endpoint(prompt: str, endpoint_name: str) -> str:
-#     """
-#     Call your SageMaker endpoint for text generation.
-#     The endpoint is expected to accept a JSON payload and return a JSON output.
-#     """
-#     sm_client = boto3.client("sagemaker-runtime")
-#     payload = {
-#         "inputs": prompt,
-#         "parameters": {
-#             "max_new_tokens": 256,
-#             "temperature": 0.2
-#         }
-#     }
-#     response = sm_client.invoke_endpoint(
-#         EndpointName=endpoint_name,
-#         ContentType="application/json",
-#         Body=json.dumps(payload)
-#     )
-#     result = json.loads(response["Body"].read())
-#     # Adjust based on your endpoint's response structure
-#     generated_text = result[0]["generated_text"]
-#     return generated_text
-
-############################################
-# 1) Setup your LLM (scaffold)
-############################################
-# For demonstration, we'll use OpenAI GPT-4 from langchain
-# Be sure to set OPENAI_API_KEY in your environment or pass api_key param
-# openai_api_key = os.getenv("OPENAI_API_KEY", "your_openai_api_key")
-# llm = ChatOpenAI(
-#     model_name="gpt-4",
-#     openai_api_key=openai_api_key,
-#     temperature=0.2
-# )
-
-############################################
-# 2) The retrieval function for OpenSearch
+# 1) The retrieval function for OpenSearch
 ############################################
 def opensearch_knn_search(query: str, index_name: str, k=5):
     """
@@ -65,17 +25,25 @@ def opensearch_knn_search(query: str, index_name: str, k=5):
     query_vector = embedding_model.embed_query(query)
 
     # B) Build the knn payload
-    payload = {
-        "size": 5,
-        "query": {
-            "knn": {
-                "vector_field": {
-                    "vector": query_vector,
-                    "k": 5
+    if "architecture" in query or "diagram" in query:
+        payload = {
+            "query": {
+                "match_all": {}
+            },
+            "size": 100
+        }
+    else:
+        payload = {
+            "size": 5,
+            "query": {
+                "knn": {
+                    "embedding": {
+                        "vector": query_vector,
+                        "k": 5
+                    }
                 }
             }
         }
-    }
 
     # C) Perform the request
     auth = HTTPBasicAuth(os.getenv("OPENSEARCH_USERNAME"), os.getenv("OPENSEARCH_PASSWORD"))
@@ -106,7 +74,7 @@ def format_dynamic_list_to_string(dynamic_list):
     return formatted_str
 
 ############################################
-# 3) Prompt Construction
+# 2) Prompt Construction
 ############################################
 def build_prompt(query: str, retrieved_docs: list[str]) -> str:
     """
@@ -114,18 +82,38 @@ def build_prompt(query: str, retrieved_docs: list[str]) -> str:
     You can make this as fancy or minimal as you like.
     """
     context_str = "\n\n".join(retrieved_docs)
-    prompt = f"""You are a helpful coding assistant. 
-Use the following code context to answer the user's question.
+    if "architecture" in query.lower() or "diagram" in query.lower():
+        prompt = f"""You are the smartest code analyzer. 
+        Use the following code context to answer the user's question.
 
-Context:
-{context_str}
+        Context:
+        {context_str}
+        
+        Question: Create an architecture diagram of the source code using the context provided above. It should:
+                  1. Display all the possible flows starting from the entrypoint in the source code
+                  2. Mention the file name involved in that step and the function/method being called
+                  3. A one line description of what that function does
+                  4. Create it in the form of a sequence diagram and it should be very neat and clean
+                  Anything else specified in the {query} should also be addressed
 
-Question: {query}
-
-Answer:
-"""
+        Answer:
+        """
+    else:
+        prompt = f"""You are the smartest code analyzer. 
+        Use the following code context to answer the user's question.
+        
+        Context:
+        {context_str}
+        
+        Question: {query}
+        
+        Answer:
+        """
     return prompt
 
+############################################
+# 3) LLM_Claude 3.7 Sonnet Endpoint
+############################################
 def call_llm_endpoint(prompt: str) -> dict:
     # Initialize the Bedrock client
     bedrock = boto3.client(
@@ -170,7 +158,6 @@ def call_llm_endpoint(prompt: str) -> dict:
 
     return response_body
 
-## TODO - use call llm endpoint function
 ############################################
 # 4) The main RAG function
 ############################################

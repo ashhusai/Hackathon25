@@ -32,7 +32,7 @@ BULK_SIZE       = int(os.getenv("BULK_SIZE", "10000"))
 # -------------------------------------------------------------------
 # Functions
 # -------------------------------------------------------------------
-def create_index_if_not_exists(index_name: str, dimension: int = 768):
+def create_index_if_not_exists(index_name: str, dimension: int = 1536):
     """
     Creates the OpenSearch index if it doesn't exist.
     Handles concurrency gracefully by ignoring 'resource_already_exists_exception'.
@@ -79,7 +79,7 @@ def load_and_chunk(repo_path: str) -> List[Document]:
     """
     Loads .go, .yaml, .sh .js .c .cpp from `repo_path`, splits them into chunks.
     """
-    exts = [".go", ".yaml", ".sh", ".js", ".c", ".cpp"]
+    exts = [".go", ".yaml", ".sh", ".js", ".c", ".cpp", ".py", ".java"]
     docs = []
 
     repo_dir = Path(repo_path).expanduser().resolve()
@@ -88,7 +88,7 @@ def load_and_chunk(repo_path: str) -> List[Document]:
         for file_path in repo_dir.rglob(f"*{ext}"):
             try:
                 content = file_path.read_text(encoding="utf-8", errors="ignore")
-                doc = Document(page_content=content, metadata={"source": str(file_path)})
+                doc = Document(page_content=content, metadata={"source": str(file_path), "repository": repo_path})
                 docs.append(doc)
             except Exception as e:
                 print(f"Error reading {file_path}: {e}")
@@ -104,6 +104,7 @@ def embed_and_store(docs_subset: List[Document], gpu_id: int, index_name: str):
     # Generate unique IDs
     for i, d in enumerate(docs_subset):
         d.metadata["doc_id"] = f"{index_name}_gpu{gpu_id}_chunk{i}"
+        d.metadata["file_name"] = d.metadata.get("source", "unknown")
 
     embeddings = HuggingFaceEmbeddings(
         model_name=MODEL_NAME,

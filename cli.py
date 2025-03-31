@@ -185,13 +185,14 @@ def main():
 
             # Now let's see if user wants to ask a query
             ask_query = questionary.confirm("Do you want to ask a query now?").ask()
-            if ask_query:
+            while ask_query:
                 user_query = questionary.text("Enter your query:").ask()
                 if user_query.strip():
                     answer = rag_query(context_name, user_query)
                     print(f"\nRAG-based answer:\n{answer}\n")
                 else:
                     print("No query provided. Skipping.")
+                ask_query = questionary.confirm("Do you want to ask another query?").ask()
             else:
                 print("Skipping query for now.")
 
