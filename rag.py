@@ -61,7 +61,7 @@ def opensearch_knn_search(query: str, index_name: str, k=5):
     3. Return the top 'k' chunk texts
     """
     # A) embed the query
-    embedding_model = HuggingFaceEmbeddings(model_name="Qodo/Qodo-Embed-1-7B")
+    embedding_model = HuggingFaceEmbeddings(model_name="Qodo/Qodo-Embed-1-1.5B")
     query_vector = embedding_model.embed_query(query)
 
     # B) Build the knn payload
@@ -157,7 +157,7 @@ def call_llm_endpoint(prompt: str) -> dict:
 
     # Call the Claude 3.7 Sonnet model
     response = bedrock.invoke_model(
-        modelId="anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelId="arn:aws:bedrock:us-east-1:354488063238:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
         contentType="application/json",
         accept="application/json",
         body=json.dumps(payload)
